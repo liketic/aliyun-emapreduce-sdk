@@ -67,6 +67,7 @@ class DirectLoghubInputDStream(
   private var checkpointDir: String = null
   private var doCommit: Boolean = false
   @transient private var restartTime: Long = -1L
+  @transient private var startTime: Long = -1L
   @transient private var restart: Boolean = false
   private var lastJobTime: Long = -1L
   private var readOnlyShardCache = new mutable.HashMap[Int, String]()
@@ -176,10 +177,14 @@ class DirectLoghubInputDStream(
   override def compute(validTime: Time): Option[RDD[String]] = {
     if (restartTime == -1L) {
       restartTime = {
+    if (startTime == -1L) {
+      startTime = if (restart) {
         val originalStartTime = graph.zeroTime.milliseconds
         val period = graph.batchDuration.milliseconds
         val gap = System.currentTimeMillis() - originalStartTime
         (math.floor(gap.toDouble / period).toLong + 1) * period + originalStartTime
+      } else {
+        validTime.milliseconds
       }
     }
 
@@ -199,6 +204,7 @@ class DirectLoghubInputDStream(
         }
       }
       val rdd = if (validTime.milliseconds > restartTime && (doCommit || lastFailed)) {
+      val rdd = if (validTime.milliseconds > startTime && (doCommit || lastFailed)) {
         if (restart || lastFailed) {
           // 1. At the first time after restart, we should recompute from the last `consume`
           // offset. (TODO: confirm this logic?)
@@ -256,6 +262,7 @@ class DirectLoghubInputDStream(
 
       if (validTime.milliseconds <= restartTime) {
         return None
+        new FakeLoghubRDD(ssc.sc).setName(s"Empty-LoghubRDD-${validTime.toString()}")
       }
 
       val description = shardOffsets.map { p =>
@@ -350,6 +357,7 @@ class DirectLoghubInputDStream(
       }
       mClient = new LoghubClientAgent(endpoint, accessKeyId, accessKeySecret)
       restartTime = -1L
+      startTime = -1L
       restart = true
     }
   }
